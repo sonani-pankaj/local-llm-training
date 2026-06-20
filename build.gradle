@@ -1,0 +1,378 @@
+/*
+ * build.gradle - LLM Training Platform Build Configuration
+ *
+ * This build file is designed to support multiple GPU backends:
+ * - NVIDIA CUDA (using cuDNN and CUDA toolkit)
+ * - AMD ROCm (using MIOpen and ROCm stack)
+ * - CPU fallback (pure Java computation)
+ *
+ * The actual GPU-specific dependencies are loaded at runtime
+ * based on detected hardware, not at compile time.
+ */
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '4.1.0'
+	id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.aigrama'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	toolchain {
+    // Keep on LTS for stable annotation processing (Lombok) during compilation.
+    languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+repositories {
+	mavenCentral()
+	// DJL snapshots for latest GPU support
+}
+
+ext {
+    // DJL and Engine versions
+    djlVersion = '0.31.1'
+    pytorchVersion = '2.1.2'
+    onnxRuntimeVersion = '0.36.0'
+
+    // GPU backend versions
+    cudaBackendVersion = '12.1'
+    hipSdkVersion = '6.0.0'  // Your installed HIP SDK version
+}
+
+configurations {
+    // NVIDIA CUDA runtime (NVIDIA GPUs)
+    cudaRuntime {
+        canBeResolved = true
+        canBeConsumed = false
+    }
+
+    // AMD HIP/DirectML runtime (AMD GPUs on Windows)
+    amdWindowsRuntime {
+        canBeResolved = true
+        canBeConsumed = false
+    }
+
+    // AMD ROCm runtime (AMD GPUs on Linux)
+    amdLinuxRuntime {
+        canBeResolved = true
+        canBeConsumed = false
+    }
+
+    // CPU fallback runtime
+    cpuRuntime {
+        canBeResolved = true
+        canBeConsumed = false
+    }
+}
+
+dependencies {
+    // ==========================================
+    // SPRING BOOT CORE
+    // ==========================================
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+
+    // ==========================================
+    // DJL CORE API (GPU-agnostic)
+    // ==========================================
+    implementation "ai.djl:api:${djlVersion}"
+
+    // ==========================================
+    // ENGINE SUPPORT
+    // ==========================================
+
+    // PyTorch Engine (for NVIDIA CUDA and CPU)
+    implementation "ai.djl.pytorch:pytorch-engine:${djlVersion}"
+
+    // ONNX Runtime Engine (for AMD GPUs via DirectML/ROCm)
+    implementation "ai.djl.onnxruntime:onnxruntime-engine:${djlVersion}"
+
+    // ==========================================
+    // NATIVE LIBRARIES
+    // ==========================================
+
+    // NVIDIA CUDA 12.1 (NVIDIA GPUs only)
+    cudaRuntime "ai.djl.pytorch:pytorch-native-cu121:${pytorchVersion}"
+
+    // AMD GPU on Windows - Windows ONNX Runtime runtime
+    // This keeps the Windows AMD path resolvable and lets the app start cleanly.
+    amdWindowsRuntime "ai.djl.onnxruntime:onnxruntime-engine:${onnxRuntimeVersion}"
+
+    // AMD GPU on Linux - ROCm backend
+    amdLinuxRuntime "ai.djl.onnxruntime:onnxruntime-native-rocm:${onnxRuntimeVersion}"
+
+    // CPU fallback (works everywhere)
+    cpuRuntime "ai.djl.pytorch:pytorch-native-cpu:${pytorchVersion}"
+
+    // ==========================================
+    // SYSTEM DETECTION
+    // ==========================================
+    implementation 'com.github.oshi:oshi-core:6.6.1'
+
+    // ==========================================
+    // UTILITIES
+    // ==========================================
+    implementation 'com.google.code.gson:gson:2.11.0'
+    implementation 'org.apache.commons:commons-lang3:3.18.0'
+    implementation 'commons-io:commons-io:2.16.1'
+
+    // ==========================================
+    // LOMBOK
+    // ==========================================
+    compileOnly 'org.projectlombok:lombok:1.18.36'
+    annotationProcessor 'org.projectlombok:lombok:1.18.36'
+
+    // ==========================================
+    // TESTING
+    // ==========================================
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+// ==========================================
+// GPU DETECTION: NVIDIA / AMD / CPU
+// ==========================================
+tasks.register("detectGpu") {
+    description = 'Detects NVIDIA, AMD, or CPU at build/runtime startup'
+    group = 'GPU Setup'
+
+    doLast {
+        def detectedGpu = 'CPU'
+        def gpuModel = 'Unknown'
+        def gpuMemory = 'N/A'
+        def osName = System.getProperty('os.name', 'unknown').toLowerCase()
+        def isWindows = osName.contains('win')
+
+        println ""
+        println "============================================"
+        println "        GPU DETECTION (NVIDIA / AMD)       "
+        println "============================================"
+        println "  OS: ${System.getProperty('os.name')}"
+
+        def forcedGpu = System.getenv('ACTIVE_GPU')
+        if (forcedGpu != null && !forcedGpu.isBlank()) {
+            detectedGpu = forcedGpu.toUpperCase()
+            println "  Manual Override: ${detectedGpu}"
+        }
+
+        if (forcedGpu == null || forcedGpu.isBlank()) {
+            def nvidiaInfo = checkNvidiaGpu()
+            if (nvidiaInfo) {
+                detectedGpu = 'NVIDIA'
+                gpuModel = nvidiaInfo.model
+                gpuMemory = nvidiaInfo.memory
+                println "  [FOUND] NVIDIA GPU"
+            } else {
+                def amdInfo = isWindows ? checkAmdWindows() : checkAmdRocm()
+                if (amdInfo) {
+                    detectedGpu = 'AMD'
+                    gpuModel = amdInfo.model
+                    gpuMemory = amdInfo.memory
+                    println "  [FOUND] AMD GPU"
+                }
+            }
+        }
+
+        System.setProperty('detected.gpu.type', detectedGpu)
+        System.setProperty('detected.gpu.model', gpuModel as String)
+        System.setProperty('detected.gpu.memory', gpuMemory as String)
+
+        println "  ----------------------------------------"
+        println "  Detected GPU   : ${detectedGpu}"
+        println "  GPU Model      : ${gpuModel}"
+        println "  GPU Memory     : ${gpuMemory}"
+        println "============================================"
+
+        println ""
+        println "  RECOMMENDED BACKEND:"
+        switch (detectedGpu) {
+            case 'NVIDIA':
+                println "  >>> NVIDIA CUDA"
+                break
+            case 'AMD':
+                println "  >>> AMD GPU"
+                break
+            default:
+                println "  >>> CPU backend"
+        }
+        println ""
+    }
+}
+
+static def checkNvidiaGpu() {
+    try {
+        def process = 'nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits'.execute()
+        process.waitFor()
+
+        def output = process.text?.trim()
+        if (process.exitValue() == 0 && output) {
+            def parts = output.split(',')
+            return [
+                model: parts[0].trim(),
+                memory: parts.length > 1 ? parts[1].trim() + ' MB' : 'Unknown'
+            ]
+        }
+    } catch (Exception ignored) {
+        // NVIDIA tools not available.
+    }
+    return null
+}
+
+static def checkAmdWindows() {
+    try {
+        def process = [
+            'powershell',
+            '-NoProfile',
+            '-Command',
+            "Get-CimInstance Win32_VideoController | Where-Object { \$_.Name -match 'AMD|Radeon' } | Sort-Object AdapterRAM -Descending | Select-Object -First 1 Name,AdapterRAM | Format-List"
+        ].execute()
+        process.waitFor()
+
+        def output = process.text?.trim()
+        if (process.exitValue() == 0 && output) {
+            def nameMatch = (output =~ /Name\s*:\s*(.+)/)
+            def memoryMatch = (output =~ /AdapterRAM\s*:\s*(\d+)/)
+
+            def name = nameMatch.find() ? nameMatch.group(1).trim() : null
+            def adapterRam = memoryMatch.find() ? memoryMatch.group(1).trim() : null
+
+            if (name && (name.toUpperCase().contains('AMD') || name.toUpperCase().contains('RADEON'))) {
+                def inferredMemoryGb = inferAmdVramGbFromModel(name)
+                def adapterRamGb = adapterRam ? (adapterRam.toLong() / (1024.0 * 1024.0 * 1024.0)) : 0.0d
+                def selectedMemoryGb = inferredMemoryGb > 0 ? inferredMemoryGb : adapterRamGb
+
+                return [
+                    model: name,
+                    memory: selectedMemoryGb > 0 ? String.format('%.1f GB', selectedMemoryGb) : 'Unknown'
+                ]
+            }
+        }
+    } catch (Exception ignored) {
+        // PowerShell/CIM not available.
+    }
+
+    try {
+        def process = 'cmd /c wmic path win32_VideoController get Name,AdapterRAM'.execute()
+        process.waitFor()
+        def text = process.text?.trim()
+        if (process.exitValue() == 0 && text) {
+            def lines = text.readLines().findAll { it.trim() }
+            def amdLine = lines.find { it.toUpperCase().contains('AMD') || it.toUpperCase().contains('RADEON') }
+            if (amdLine) {
+                def parts = amdLine.trim().split(/\s+/)
+                def model = parts.size() > 1 ? parts[0..-2].join(' ') : amdLine.trim()
+                def inferredMemoryGb = inferAmdVramGbFromModel(model)
+                return [model: model, memory: inferredMemoryGb > 0 ? String.format('%.1f GB', inferredMemoryGb) : 'Unknown']
+            }
+        }
+    } catch (Exception ignored) {
+        // WMIC fallback not available.
+    }
+    return null
+}
+
+static double inferAmdVramGbFromModel(String model) {
+    if (model == null) {
+        return 0.0d
+    }
+
+    def upper = model.toUpperCase()
+    if (upper.contains('RX 9070 XT')) {
+        return 16.0d
+    }
+    if (upper.contains('RX 9070')) {
+        return 16.0d
+    }
+    if (upper.contains('RX 7900 XTX')) {
+        return 24.0d
+    }
+    if (upper.contains('RX 7900 XT')) {
+        return 20.0d
+    }
+    if (upper.contains('RX 7900')) {
+        return 20.0d
+    }
+    if (upper.contains('RX 7800 XT')) {
+        return 16.0d
+    }
+    if (upper.contains('RX 7700 XT')) {
+        return 12.0d
+    }
+    if (upper.contains('RX 6800 XT')) {
+        return 16.0d
+    }
+    if (upper.contains('RX 6800')) {
+        return 16.0d
+    }
+    return 0.0d
+}
+
+static def checkAmdRocm() {
+    try {
+        def process = 'rocm-smi --showproductname --csv'.execute()
+        process.waitFor()
+        def output = process.text
+
+        if (process.exitValue() == 0 && output.contains('AMD')) {
+            def cardLine = output.readLines().find { it.contains('Card') }
+            def model = cardLine?.split(',')?.getAt(1)?.trim() ?: 'AMD GPU'
+            return [model: model, memory: 'Unknown']
+        }
+    } catch (Exception ignored) {
+        // ROCm tools not available.
+    }
+    return null
+}
+
+compileJava.dependsOn detectGpu
+
+afterEvaluate {
+    println ""
+    println "[BUILD] GPU-aware build configured"
+    println ""
+}
+
+bootRun {
+    dependsOn detectGpu
+
+    jvmArgs = [
+        '--enable-preview',
+        '-Xmx24g',
+        '-Xms4g',
+        '-XX:+UseZGC',
+        '-XX:+ZGenerational',
+        '-Dfile.encoding=UTF-8',
+        "-Ddetected.gpu.type=${System.getProperty('detected.gpu.type', 'CPU')}",
+        '-Dai.djl.default_engine=PyTorch'
+    ]
+
+    doFirst {
+        def gpuType = System.getProperty('detected.gpu.type', 'CPU')
+        def isWindows = System.getProperty('os.name', '').toLowerCase().contains('win')
+
+        switch (gpuType) {
+            case 'AMD':
+                if (isWindows) {
+                    classpath += configurations.amdWindowsRuntime
+                    println "[BOOT] Loading ONNX Runtime + DirectML for AMD GPU"
+                    System.setProperty('ai.djl.default_engine', 'OnnxRuntime')
+                } else {
+                    classpath += configurations.amdLinuxRuntime
+                    println "[BOOT] Loading ONNX Runtime + ROCm for AMD GPU"
+                    System.setProperty('ai.djl.default_engine', 'OnnxRuntime')
+                }
+                break
+            case 'NVIDIA':
+                classpath += configurations.cudaRuntime
+                println "[BOOT] Loading PyTorch CUDA for NVIDIA GPU"
+                System.setProperty('ai.djl.default_engine', 'PyTorch')
+                break
+            default:
+                classpath += configurations.cpuRuntime
+                println "[BOOT] Loading PyTorch CPU (fallback)"
+                System.setProperty('ai.djl.default_engine', 'PyTorch')
+        }
+    }
+}

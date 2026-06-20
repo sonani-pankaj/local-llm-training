@@ -1,0 +1,22 @@
+# application-rocm.yml
+# AMD ROCm-specific configuration
+# Activated when AMD GPU is detected
+
+gpu:
+  active-backend: ROCM
+
+  rocm:
+    device-id: 0
+    version: "6.0.0"
+    miopen-enabled: true
+    pytorch-backend: rocm6.0
+    visible-devices: "0"
+    hip-path: /opt/rocm/bin
+
+  memory:
+    gpu-memory-fraction: 0.90
+
+training:
+  optimization:
+    mixed-precision: fp16
+    hip-graphs-enabled: true

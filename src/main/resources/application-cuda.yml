@@ -1,0 +1,22 @@
+# application-cuda.yml
+# NVIDIA CUDA-specific configuration
+# Activated when CUDA GPU is detected
+
+gpu:
+  active-backend: CUDA
+
+  cuda:
+    device-id: 0
+    compute-capability: auto
+    cudnn-enabled: true
+    pytorch-backend: cu121
+    visible-devices: "0"
+
+  memory:
+    gpu-memory-fraction: 0.95
+
+training:
+  optimization:
+    mixed-precision: fp16
+    cuda-graphs-enabled: true
+    tensor-cores-enabled: true

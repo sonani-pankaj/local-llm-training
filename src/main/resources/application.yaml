@@ -1,0 +1,66 @@
+# application.yml - Main Application Configuration
+# 
+# This file contains GPU-agnostic configuration.
+# GPU-specific settings are in application-cuda.yml and application-rocm.yml
+# The active GPU profile is determined at runtime through auto-detection.
+
+spring:
+  application:
+    name: llm-training-platform
+  profiles:
+    active: default
+
+server:
+  port: 8080
+
+# GPU Configuration (base settings, overridden by profiles)
+gpu:
+  enabled: true
+  active-backend: auto  # auto, cuda, rocm, cpu
+  
+  # Memory management
+  memory:
+    gpu-memory-fraction: 0.9
+    allow-growth: true
+    cpu-offload-limit: 8GB
+
+# Model Training Configuration
+training:
+  model:
+    vocab-size: 10000
+    embed-dim: 512
+    num-heads: 8
+    num-layers: 6
+    max-sequence-length: 128
+    dropout-rate: 0.1
+  
+  hyperparameters:
+    batch-size: auto  # Determined by GPU memory
+    epochs: 10
+    learning-rate: 0.0001
+    warmup-steps: 500
+    weight-decay: 0.01
+    gradient-clip: 1.0
+  
+  optimization:
+    mixed-precision: auto  # Based on GPU capability
+    gradient-accumulation: 4
+    checkpoint-frequency: 1000
+  
+  data:
+    dataset-path: src/main/resources/training_data.txt
+    validation-split: 0.1
+    shuffle-buffer: 10000
+
+logging:
+  level:
+    com.example.llm: INFO
+    ai.djl: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,gpu,training
