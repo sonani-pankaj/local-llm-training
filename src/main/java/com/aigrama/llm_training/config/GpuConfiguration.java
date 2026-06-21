@@ -70,7 +70,7 @@ public class GpuConfiguration {
             }
             case "HIP", "AMD_HIP" -> {
                 log.info("Forcing AMD HIP/DirectML backend");
-                yield new HipDirectMlBackend();
+                yield new HipDirectMlBackend(gpuDetector);
             }
             case "ROCM" -> {
                 log.info("Forcing AMD ROCm backend");
@@ -104,7 +104,7 @@ public class GpuConfiguration {
                 log.info("AMD HIP/DirectML backend selected | GPU: {} | VRAM: {} GB",
                         gpuDetector.getGpuModel(),
                         gpuDetector.getVramGb());
-                yield new HipDirectMlBackend();
+                yield new HipDirectMlBackend(gpuDetector);
             }
             case "ROCM" -> {
                 log.info("AMD ROCm backend selected | GPU: {} | VRAM: {} GB",

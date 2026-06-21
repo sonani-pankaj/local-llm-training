@@ -35,7 +35,7 @@ training:
     dropout-rate: 0.1
   
   hyperparameters:
-    batch-size: auto  # Determined by GPU memory
+    batch-size: 8
     epochs: 10
     learning-rate: 0.0001
     warmup-steps: 500
@@ -48,7 +48,8 @@ training:
     checkpoint-frequency: 1000
   
   data:
-    dataset-path: src/main/resources/training_data.txt
+    file-path: classpath:training_data.txt
+    generate-sample: true
     validation-split: 0.1
     shuffle-buffer: 10000
 

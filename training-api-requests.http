@@ -1,0 +1,22 @@
+### App health
+GET http://localhost:8080/api/training/health
+
+### GPU info
+GET http://localhost:8080/api/gpu/info
+
+### GPU health
+GET http://localhost:8080/api/gpu/health
+
+### Start training
+POST http://localhost:8080/api/training/start
+
+### Check training status
+GET http://localhost:8080/api/training/status
+
+### Run backend benchmark (returns fallback-java if direct backend op is unsupported)
+POST http://localhost:8080/api/gpu/benchmark
+
+### (Optional) Switch backend manually, then restart app
+POST http://localhost:8080/api/gpu/switch?backend=CPU
+Content-Type: application/x-www-form-urlencoded
+
